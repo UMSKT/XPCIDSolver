@@ -3,6 +3,7 @@ import os
 import sys
 import json
 import subprocess
+import time
 
 values = {
     "name": "WindowsXP",
@@ -17,6 +18,9 @@ values = {
     },
     "pub": 65537,                # 0x10001
 }
+
+# Start measuring the execution time
+start_time = time.time()
 
 skip = 0
 
@@ -183,3 +187,12 @@ priv = process.stdout.read()
 process.wait()
 
 print("\nPrivate key:", priv)
+
+# Stop measuring the execution time
+end_time = time.time()
+
+# Calculate the elapsed time
+elapsed_time = end_time - start_time
+
+# Print the execution time
+print("Execution time:", elapsed_time, "seconds")
