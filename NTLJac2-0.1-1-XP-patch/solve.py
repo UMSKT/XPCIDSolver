@@ -19,6 +19,15 @@ values = {
     "pub": 65537,                # 0x10001
 }
 
+def tee(*output, file=None, **kwargs):
+    # Get the current timestamp
+    timestamp = time.strftime("[%H:%M:%S]", time.localtime())
+    
+    print(timestamp, *output, file=sys.stdout, **kwargs)
+    
+    if file is not None:
+        print(timestamp, *output, file=file, **kwargs)
+
 # Start measuring the execution time
 start_time = time.time()
 
@@ -37,6 +46,8 @@ os.makedirs(values["name"], exist_ok=True)
 
 ell_todo = [5, 11, 13, 17, 19]
 curve = list(values["x"].values())  # Excluding p and pub from the curve
+
+logFile = open(f"{values['name']}/log.txt", "a")
 
 if skip == 0:
     ell = []
@@ -58,16 +69,16 @@ if skip == 0:
                 s1p = data["s1p"]
                 s2p = data["s2p"]
             else:
-                print(f"JSON value lengths don't match! starting from scratch")
+                tee(f"JSON value lengths don't match! starting from scratch", file=logFile)
 
     for i in range(len(ell_todo)):
         ell_i = ell_todo[i]
         
         if i < len(ell):
-            print(f"\n---------- Skipping order mod {ell_i} ----------")
+            tee(f"\n---------- Skipping order mod {ell_i} ----------", file=logFile)
             continue
 
-        print(f"\n---------- Solving order mod {ell_i} ----------")
+        teel(f"\n---------- Solving order mod {ell_i} ----------", file=logFile)
         input_filename = f"{values['name']}/input_ell_{ell_i}.txt"
 
         with open(input_filename, "w") as f:
@@ -89,7 +100,7 @@ if skip == 0:
             if output == '' and process.poll() is not None:
                 break
             if output:
-                print(output.strip())
+                tee(output.strip(), file=logFile)
                 
         process.wait()
 
@@ -106,8 +117,8 @@ if skip == 0:
             json.dump({"ell": ell, "s1p": s1p, "s2p": s2p}, f)
 
 else:
-    print("\n---------- Skipping solving of orders mod small primes ----------")
-    print("Setting precomputed values:")
+    tee("\n---------- Skipping solving of orders mod small primes ----------", file=logFile)
+    tee("Setting precomputed values:", file=logFile)
 
     ell = [5, 11, 13, 17, 19, 23]
     s1p = [4, 1, 5, 16, 15, 8]
@@ -117,7 +128,7 @@ crt_arr_ell = ",".join(map(str, ell))
 crt_arr_s1p = ",".join(map(str, s1p))
 crt_arr_s2p = ",".join(map(str, s2p))
 
-print("\n---------- Calculating bigger modular information using CRT ----------")
+tee("\n---------- Calculating bigger modular information using CRT ----------", file=logFile)
 filename = f"{values['name']}/input_crt.txt"
 
 with open(filename, "w") as f:
@@ -130,13 +141,15 @@ with open(filename, "r") as f:
     process.stdin.write(f.read())
 process.stdin.close()
 
+crt_output = ""
 # read and display the output in real-time
 while True:
     output = process.stdout.readline()
     if output == '' and process.poll() is not None:
         break
     if output:
-        print(output.strip())
+        crt_output = output.strip()
+        tee(output.strip(), file=logFile)
         
 process.wait()
 
@@ -145,17 +158,17 @@ crt_mod = int(crt_res[2])
 crt_s1p = int(crt_res[0])
 crt_s2p = int(crt_res[1])
 
-print("CRT mod =", crt_mod)
-print("CRT s1p =", crt_s1p)
-print("CRT s2p =", crt_s2p)
+tee("CRT mod =", crt_mod, file=logFile)
+tee("CRT s1p =", crt_s1p, file=logFile)
+tee("CRT s2p =", crt_s2p, file=logFile)
 
-print("\n---------- Solving order from CRT results ----------")
+tee("\n---------- Solving order from CRT results ----------", file=logFile)
 filename = f"{values['name']}/input_lmpmct.txt"
 
 with open(filename, "w") as f:
     f.write(str(values["p"]) + "\n")
     
-    for value in list(values["x"].values()):
+    for value in list(values["x"].values())[:-1]:
         f.write(str(value) + "\n")
         
     f.write(str(crt_mod) + "\n")
@@ -173,20 +186,20 @@ while True:
     if output == '' and process.poll() is not None:
         break
     if output:
-        print(output.strip())
+        tee(output.strip(), file=logFile)
         
 process.wait()
 
 with open(f"{values['name']}/output_lmpmct.txt", "r") as f:
     order = f.read()
 
-print("\n---------- Calculating private key from order ----------")
+tee("\n---------- Calculating private key from order ----------", file=logFile)
 process = subprocess.run(["./InvMod", str(values['pub']), order], capture_output=True, text=True)
 priv = process.stdout.read()
 
 process.wait()
 
-print("\nPrivate key:", priv)
+tee("\nPrivate key:", priv, file=logFile)
 
 # Stop measuring the execution time
 end_time = time.time()
@@ -195,4 +208,4 @@ end_time = time.time()
 elapsed_time = end_time - start_time
 
 # Print the execution time
-print("Execution time:", elapsed_time, "seconds")
+tee("Execution time:", elapsed_time, "seconds", file=logFile)
