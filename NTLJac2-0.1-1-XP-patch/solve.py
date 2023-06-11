@@ -78,7 +78,7 @@ if skip == 0:
             tee(f"\n---------- Skipping order mod {ell_i} ----------", file=logFile)
             continue
 
-        teel(f"\n---------- Solving order mod {ell_i} ----------", file=logFile)
+        tee(f"\n---------- Solving order mod {ell_i} ----------", file=logFile)
         input_filename = f"{values['name']}/input_ell_{ell_i}.txt"
 
         with open(input_filename, "w") as f:
@@ -194,12 +194,13 @@ with open(f"{values['name']}/output_lmpmct.txt", "r") as f:
     order = f.read()
 
 tee("\n---------- Calculating private key from order ----------", file=logFile)
-process = subprocess.run(["./InvMod", str(values['pub']), order], capture_output=True, text=True)
+process = subprocess.Popen(["./InvMod", str(values['pub']), order], stdout=subprocess.PIPE, universal_newlines=True)
 priv = process.stdout.read()
 
 process.wait()
 
 tee("\nPrivate key:", priv, file=logFile)
+tee("\nDecimal:", int(priv, 16).str(), file=logFile)
 
 # Stop measuring the execution time
 end_time = time.time()
