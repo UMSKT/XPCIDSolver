@@ -4,104 +4,156 @@ import sys
 import json
 import subprocess
 import time
+import jsonschema
+import select
 
-values = {
-    "name": "WindowsXP",
-    "p": 102011604035381881,     # 0x16A6B036D7F2A79
-    "x": {
-        "0": 0,
-        "1": 9433814980383617,   # 0x21840136C85381
-        "2": 19168316694801104,  # 0x44197B83892AD0
-        "3": 90078616228674308,  # 0x1400606322B3B04
-        "4": 90078616228674308,  # 0x1400606322B3B04
-        "5": 1,
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "p": {"type": "string"},
+        "x": {
+            "type": "object",
+            "properties": {
+                "0": {"type": "string"},
+                "1": {"type": "string"},
+                "2": {"type": "string"},
+                "3": {"type": "string"},
+                "4": {"type": "string"},
+                "5": {"type": "string"}
+            },
+            "required": ["0", "1", "2", "3", "4", "5"]
+        },
+        "pub": {"type": "string"},
+        "ell": {"type": "array", "items": {"type": "integer"}},
+        "s1p": {"type": "array", "items": {"type": "integer"}},
+        "s2p": {"type": "array", "items": {"type": "integer"}}
     },
-    "pub": 65537,                # 0x10001
+    "required": ["name", "p", "x", "pub", "ell", "s1p", "s2p"]
 }
 
+
+def main():
+    start_time = time.time()
+
+    if len(sys.argv) > 1 and sys.argv[1] == "-h":
+        usage()
+
+    with open(sys.argv[1], "r") as f:
+        try:
+            loaded_dict = json.load(f)
+            jsonschema.validate(loaded_dict, SCHEMA)
+            print("JSON Validation successful.")
+            values = loaded_dict
+            
+        except jsonschema.exceptions.ValidationError as e:
+            print(f"JSON Validation error: {e}")
+            usage()
+
+    os.makedirs(values["name"], exist_ok=True)
+    log_file = open(f"{values['name']}/log.txt", "a")
+
+    do_ell(values, filename=sys.argv[1], log_file=log_file)
+    do_crt(values, filename=sys.argv[1], log_file=log_file)
+    do_lmpmct(values, filename=sys.argv[1], log_file=log_file)
+    do_inv_mod(values, filename=sys.argv[1], log_file=log_file)
+
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    tee("Execution time:", elapsed_time, "seconds", file=log_file)
+
+
+def usage():
+    print(f"Usage: {sys.argv[0]} <inputfile.json> [options]")
+    print("  -h : Display this help")
+    exit(0)
+
+
 def tee(*output, file=None, **kwargs):
-    # Get the current timestamp
     timestamp = time.strftime("[%H:%M:%S]", time.localtime())
-    
     print(timestamp, *output, file=sys.stdout, **kwargs)
-    
+
     if file is not None:
         print(timestamp, *output, file=file, **kwargs)
 
-# Start measuring the execution time
-start_time = time.time()
 
-skip = 0
+def update_json(data, filename, log_file=None):
+    tee(f"Writing state to JSON {filename}")
 
-if len(sys.argv) > 1:
-    if sys.argv[1] == "-h":
-        print(f"Usage: {sys.argv[0]} [options]")
-        print("  -h : Display this help")
-        print("  -s : Skip the longest part to solve and use precomputed orders mod small primes")
-        exit(0)
-    elif sys.argv[1] == "-s":
-        skip = 1
+    with open(filename, "w") as file:
+        json.dump(data, file, indent=4)
 
-os.makedirs(values["name"], exist_ok=True)
 
-ell_todo = [5, 11, 13, 17, 19]
-curve = list(values["x"].values())  # Excluding p and pub from the curve
+def process_output_pipe(process=None, stdout=None, stderr=None, log_file=None):
+    process_stdout = process.stdout
+    process_stderr = process.stderr
 
-logFile = open(f"{values['name']}/log.txt", "a")
+    while True:
+        try:
+            ready_streams, _, _ = select.select([process_stdout, process_stderr], [], [])
+        except ValueError:
+            break
 
-if skip == 0:
-    ell = []
-    s1p = []
-    s2p = []
-
-    # Check if the JSON file already exists with the required values
-    json_file = f"{values['name']}/input_ell_state.json"
-    if os.path.exists(json_file):
-        with open(json_file, "r") as f:
-            data = json.load(f)
-            if (
-                "ell" in data
-                and "s1p" in data
-                and "s2p" in data
-                and len(data["ell"]) == len(data["s1p"]) == len(data["s2p"])
-            ):
-                ell = data["ell"]
-                s1p = data["s1p"]
-                s2p = data["s2p"]
-            else:
-                tee(f"JSON value lengths don't match! starting from scratch", file=logFile)
-
-    for i in range(len(ell_todo)):
-        ell_i = ell_todo[i]
+        for stream in ready_streams:
+            if stream == process_stdout:
+                stdout_line = stream.readline()
+                if stdout_line:
+                    stdout_line = stdout_line.strip()
+                    tee(">", stdout_line, file=log_file)
+                    stdout.append(stdout_line)
+                else:
+                    process_stdout.close()
+            elif stream == process_stderr:
+                stderr_line = stream.readline()
+                if stderr_line:
+                    stderr_line = stderr_line.strip()
+                    tee("!", stderr_line, file=log_file)
+                    stderr.append(stderr_line)
+                else:
+                    process_stderr.close()
         
+        if process.poll() is not None and process_stdout.closed and process_stderr.closed:
+            break
+
+
+def do_ell(data, filename, log_file=None):
+    ell = data.get("ell", [])
+    s1p = data.get("s1p", [])
+    s2p = data.get("s2p", [])
+
+    if len(ell) != len(s1p) != len(s2p):
+        print("JSON value lengths don't match! Refusing to process")
+        usage()
+
+    ell_todo = [5, 11, 13, 17, 19]
+    curve = list(map(int, data["x"].values()))
+    for i, ell_i in enumerate(ell_todo):
         if i < len(ell):
-            tee(f"\n---------- Skipping order mod {ell_i} ----------", file=logFile)
+            tee(f"---------- Skipping order mod {ell_i} ----------\n", file=log_file)
             continue
 
-        tee(f"\n---------- Solving order mod {ell_i} ----------", file=logFile)
-        input_filename = f"{values['name']}/input_ell_{ell_i}.txt"
+        tee(f"---------- Solving order mod {ell_i} ----------\n", file=log_file)
+        input_filename = f"{data['name']}/input_ell_{ell_i}.txt"
 
         with open(input_filename, "w") as f:
-            f.write(str(values["p"]) + "\n")
+            f.write(str(data["p"]) + "\n")
             f.write(str(curve) + "\n")
             f.write(str(ell_i) + "\n")
 
-        output_filename = f"{values['name']}/input_ell_{ell_i}_output.txt"
-        
-        # open a subprocess
-        process = subprocess.Popen(["./main", "-o", output_filename], stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
+        output_filename = f"{data['name']}/input_ell_{ell_i}_output.txt"
+
+        process = subprocess.Popen(["./main", "-o", output_filename],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, universal_newlines=True)
+                                   
         with open(input_filename, "r") as f:
             process.stdin.write(f.read())
-        process.stdin.close()
-        
-        # read and display the output in real-time
-        while True:
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None:
-                break
-            if output:
-                tee(output.strip(), file=logFile)
-                
+            process.stdin.close()
+
+        stdout = []
+        stderr = []
+        process_output_pipe(process=process, stdout=stdout, stderr=stderr, log_file=log_file)
+
         process.wait()
 
         with open(output_filename, "r") as f:
@@ -112,101 +164,99 @@ if skip == 0:
         s1p.append(int(ell_res[1]))
         s2p.append(int(ell_res[2]))
 
-        # Write ell, s1p, and s2p values to JSON file
-        with open(json_file, "w") as f:
-            json.dump({"ell": ell, "s1p": s1p, "s2p": s2p}, f)
+        data["ell"] = ell
+        data["s1p"] = s1p
+        data["s2p"] = s2p
+        update_json(data, filename, log_file=log_file)
 
-else:
-    tee("\n---------- Skipping solving of orders mod small primes ----------", file=logFile)
-    tee("Setting precomputed values:", file=logFile)
 
-    ell = [5, 11, 13, 17, 19, 23]
-    s1p = [4, 1, 5, 16, 15, 8]
-    s2p = [0, 2, 10, 16, 2, 7]
+def do_crt(data, filename, log_file=None):
+    crt_arr_ell = ",".join(map(str, data["ell"]))
+    crt_arr_s1p = ",".join(map(str, data["s1p"]))
+    crt_arr_s2p = ",".join(map(str, data["s2p"]))
 
-crt_arr_ell = ",".join(map(str, ell))
-crt_arr_s1p = ",".join(map(str, s1p))
-crt_arr_s2p = ",".join(map(str, s2p))
+    tee("---------- Calculating bigger modular information using CRT ----------\n", file=log_file)
+    filename = f"{data['name']}/input_crt.txt"
 
-tee("\n---------- Calculating bigger modular information using CRT ----------", file=logFile)
-filename = f"{values['name']}/input_crt.txt"
+    with open(filename, "w") as f:
+        f.write(crt_arr_ell + "\n")
+        f.write(crt_arr_s1p + "\n")
+        f.write(crt_arr_s2p + "\n")
 
-with open(filename, "w") as f:
-    f.write(crt_arr_ell + "\n")
-    f.write(crt_arr_s1p + "\n")
-    f.write(crt_arr_s2p + "\n")
+    process = subprocess.Popen(["./CRT", "-q"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, universal_newlines=True)
+                                
+    with open(filename, "r") as f:
+        process.stdin.write(f.read())
+        process.stdin.close()
 
-process = subprocess.Popen(["./CRT", "-q"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
-with open(filename, "r") as f:
-    process.stdin.write(f.read())
-process.stdin.close()
+    stdout = []
+    stderr = []
+    process_output_pipe(process=process, stdout=stdout, stderr=stderr, log_file=log_file)
 
-crt_output = ""
-# read and display the output in real-time
-while True:
-    output = process.stdout.readline()
-    if output == '' and process.poll() is not None:
-        break
-    if output:
-        crt_output = output.strip()
-        tee(output.strip(), file=logFile)
-        
-process.wait()
+    process.wait()
 
-crt_res = crt_output.split(" ")
-crt_mod = int(crt_res[2])
-crt_s1p = int(crt_res[0])
-crt_s2p = int(crt_res[1])
+    crt_res = stdout[-1].split(" ")
+    crt_mod = int(crt_res[2])
+    crt_s1p = int(crt_res[0])
+    crt_s2p = int(crt_res[1])
 
-tee("CRT mod =", crt_mod, file=logFile)
-tee("CRT s1p =", crt_s1p, file=logFile)
-tee("CRT s2p =", crt_s2p, file=logFile)
+    tee("CRT mod =", crt_mod, file=log_file)
+    tee("CRT s1p =", crt_s1p, file=log_file)
+    tee("CRT s2p =", crt_s2p, file=log_file)
 
-tee("\n---------- Solving order from CRT results ----------", file=logFile)
-filename = f"{values['name']}/input_lmpmct.txt"
+    filename = f"{data['name']}/input_lmpmct.txt"
 
-with open(filename, "w") as f:
-    f.write(str(values["p"]) + "\n")
+    with open(filename, "w") as f:
+        f.write(str(data["p"]) + "\n")
+
+        for value in list(data["x"].values())[:-1]:
+            f.write(str(value) + "\n")
+
+        f.write(str(crt_mod) + "\n")
+        f.write(str(crt_s1p) + "\n")
+        f.write(str(crt_s2p) + "\n")
+
+
+def do_lmpmct(data, filename, log_file=None):
+    tee("---------- Solving order from CRT results ----------\n", file=log_file)
+
+    process = subprocess.Popen(["./LMPMCT", "-o", f"{data['name']}/output_lmpmct.txt"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, universal_newlines=True)
+
+    filename = f"{data['name']}/input_lmpmct.txt"
     
-    for value in list(values["x"].values())[:-1]:
-        f.write(str(value) + "\n")
-        
-    f.write(str(crt_mod) + "\n")
-    f.write(str(crt_s1p) + "\n")
-    f.write(str(crt_s2p) + "\n")
+    with open(filename, "r") as f:
+        process.stdin.write(f.read())
+        process.stdin.close()
 
-process = subprocess.Popen(["./LMPMCT", "-o", f"{values['name']}/output_lmpmct.txt"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, universal_newlines=True)
-with open(filename, "r") as f:
-    process.stdin.write(f.read())
-process.stdin.close()
+    stdout = []
+    stderr = []
+    process_output_pipe(process=process, stdout=stdout, stderr=stderr, log_file=log_file)
 
-# read and display the output in real-time
-while True:
-    output = process.stdout.readline()
-    if output == '' and process.poll() is not None:
-        break
-    if output:
-        tee(output.strip(), file=logFile)
-        
-process.wait()
+    process.wait()
 
-with open(f"{values['name']}/output_lmpmct.txt", "r") as f:
-    order = f.read()
 
-tee("\n---------- Calculating private key from order ----------", file=logFile)
-process = subprocess.Popen(["./InvMod", str(values['pub']), order], stdout=subprocess.PIPE, universal_newlines=True)
-priv = process.stdout.read()
+def do_inv_mod(data, filename, log_file=None):
+    with open(f"{data['name']}/output_lmpmct.txt", "r") as f:
+        order = f.read()
 
-process.wait()
+    tee("---------- Calculating private key from order ----------\n", file=log_file)
+    process = subprocess.Popen(["./InvMod", str(data['pub']), order],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, universal_newlines=True)
 
-tee("\nPrivate key:", priv, file=logFile)
-tee("\nDecimal:", int(priv, 16).str(), file=logFile)
+    stdout = []
+    stderr = []
+    process_output_pipe(process=process, stdout=stdout, stderr=stderr, log_file=log_file)
 
-# Stop measuring the execution time
-end_time = time.time()
+    process.wait()
 
-# Calculate the elapsed time
-elapsed_time = end_time - start_time
+    tee("Private key:", stdout[-1], "\n", file=log_file)
+    tee("Decimal:", str(int(stdout[-1], 16)), "\n", file=log_file)
 
-# Print the execution time
-tee("Execution time:", elapsed_time, "seconds", file=logFile)
+
+if __name__ == "__main__":
+    main()
